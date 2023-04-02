@@ -1,3 +1,4 @@
+import requests
 import config
 import os
 import openai
@@ -9,6 +10,8 @@ from time import time,sleep
 from uuid import uuid4
 import datetime
 import pinecone
+import random
+
 
 debug = False
 # Initialize OpenAI API
@@ -20,7 +23,29 @@ pinecone_region = config.PINECONE_REGION
 pinecone_index = config.PINECONE_INDEX
 prompt_keywords_instructions = config.PROMPT_KEYWORDS_INSTRUCTIONS
 prompt_chat = config.PROMPT_CHAT
+chosen_model = config.CHATGPT_MODEL
+keyword_model = config.CHATGPT_MODEL_KEYWORDS
+
 last_keywords = []
+
+# take another function as an argument and handles the retries with exponential backoff.
+# preventing the script from crashing due to temporary connection issues
+def exponential_backoff(func, *args, **kwargs):
+    max_retries = kwargs.pop('max_retries', 5)
+    base_delay = kwargs.pop('base_delay', 1)
+    max_delay = kwargs.pop('max_delay', 60)
+
+    retries = 0
+    while retries <= max_retries:
+        try:
+            return func(*args, **kwargs)
+        except (openai.error.APIConnectionError, requests.exceptions.RequestException) as e:
+            if retries == max_retries:
+                raise e
+
+            delay = min(max_delay, base_delay * (2 ** retries)) + random.uniform(0, 0.1 * (2 ** retries))
+            retries += 1
+            sleep(delay)
 
 def open_file(filepath):
     with open(filepath, 'r', encoding='utf-8') as infile:
@@ -56,14 +81,14 @@ def timestamp_to_datetime(unix_time):
 
 def gpt3_embedding(content, engine='text-embedding-ada-002'):
     content = content.encode(encoding='ASCII',errors='ignore').decode()  # fix any UNICODE errors
-    response = openai.Embedding.create(input=content,engine=engine)
+    response = exponential_backoff(openai.Embedding.create, input=content, engine=engine)
     vector = response['data'][0]['embedding']  # this is a normal list
     return vector
 
 def chatgpt_completion(messages, prompt):
-    model="gpt-3.5-turbo"
+    model=chosen_model
     global last_keywords
-    response = openai.ChatCompletion.create(model=model, messages=messages)
+    response = exponential_backoff(openai.ChatCompletion.create, model=model, messages=messages)
     text = response['choices'][0]['message']['content']
     filename = 'chat_%s_gpt3.txt' % time()
     if not os.path.exists('chat_logs'):
@@ -93,7 +118,7 @@ last_keywords = load_last_recent_keywords()
 
 def generate_keyword_list(text):
     if debug: print("generating keywords for: ", text)
-    response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "system", "content": prompt_keywords_instructions},{"role": "user", "content": "this is not a conversation, this is the text you need to convert to keywords: '" + text + "'"}], temperature=0)
+    response = exponential_backoff(openai.ChatCompletion.create ,model=keyword_model, messages=[{"role": "system", "content": prompt_keywords_instructions},{"role": "user", "content": "this is not a conversation, this is the text you need to convert to keywords: '" + text + "'"}], temperature=0)
     newtext = response['choices'][0]['message']['content']
     if debug: print("keywords generated: ", newtext)
     # check if text contains a json string
@@ -207,5 +232,5 @@ if __name__ == '__main__':
         metadata = {'speaker': 'AIROBIN', 'time': timestamp, 'message': message, 'timestring': timestring, 'uuid': unique_id}
         save_json('messages/%s.json' % unique_id, metadata)
         payload.append((unique_id, vector))
-        vdb.upsert(payload, namespace='AIROBIN')
+        exponential_backoff(vdb.upsert ,payload, namespace='AIROBIN')
         print('\nAIROBIN: %s' % output) 
