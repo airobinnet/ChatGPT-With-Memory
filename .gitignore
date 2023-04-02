@@ -1,3 +1,9 @@
+chat_logs/*
+keywords_logs/*
+messages/*
+config.py
+api.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
