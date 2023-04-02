@@ -2,11 +2,11 @@ MOST IMPORTANT MEMORIES:
 <<MEMORY>>
 
 PREVIOUS CONVERSATIONS:
-
 <<CONVERSATION>>
-USER: <<MESSAGE>>
 
 
+
+Last message: <<MESSAGE>>
 
 You will now provide a response to the last message only, the rest is for context:
 AIROBIN:

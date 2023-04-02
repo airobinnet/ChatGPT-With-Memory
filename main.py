@@ -1,3 +1,5 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import requests
 import config
 import os
@@ -185,7 +187,14 @@ def load_conversation(results):
     return output
 
 
-if __name__ == '__main__':
+app = Flask(__name__)
+CORS(app)
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    user_input = request.json.get('user_input')
+    if not user_input:
+        return jsonify({'error': 'Missing user_input field in request data'}), 400
     convo_length = 30
     pinecone.init(api_key=pinecone_api_key, environment=pinecone_region)
     vdb = pinecone.Index(pinecone_index)
@@ -193,7 +202,7 @@ if __name__ == '__main__':
     while True:
         #### get user input, save it, vectorize it, save to pinecone
         payload = list()
-        a = input('\n\nUSER: ')
+        a = user_input
         timestamp = time()
         timestring = timestamp_to_datetime(timestamp)
         #message = '%s: %s - %s' % ('USER', timestring, a)
@@ -234,3 +243,9 @@ if __name__ == '__main__':
         payload.append((unique_id, vector))
         exponential_backoff(vdb.upsert ,payload, namespace='AIROBIN')
         print('\nAIROBIN: %s' % output) 
+        # Add your existing main code here, replacing the input() function with user_input
+        # Replace print('\nAIROBIN: %s' % output) with the following line
+        return jsonify({'airobin_response': output})
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5001)

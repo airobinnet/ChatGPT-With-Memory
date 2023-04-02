@@ -7,6 +7,8 @@ This is a README for the AIROBIN chatbot script. The AIROBIN chatbot, standing f
 - OpenAI API
 - Pinecone API
 - numpy
+- Flask
+- Flask-CORS
 
 ## How it works
 
@@ -25,16 +27,15 @@ This is a README for the AIROBIN chatbot script. The AIROBIN chatbot, standing f
 
 1. Rename `example_config.py` to `config.py` and set up your OpenAI and Pinecone API keys.
 2. In `config.py` choose the models you want to use `gpt-3.5-turbo` or `gpt-4`.
-3. Install the required dependencies using `pip install openai pinecone numpy`.
+3. Install the required dependencies using `pip install openai pinecone numpy flask flask-cors`.
 4. Run the script using `python main.py`.
-5. Enter your message when prompted with "USER:".
-6. The chatbot will generate a response and display it as "AIROBIN:".
-7. (Optional) In `main.py` set `debug = False` to enable debugging lines.
+5. Open the `web/index.html` file in your browser to interact with the chatbot.
 
 ## Files and directories
 
 - `config.py`: Contains the API keys and other configurations.
 - `main.py`: The main script for the AIROBIN chatbot.
+- `web/index.html`: The web interface for interacting with the chatbot.
 - `chat_logs`: Directory containing chat logs saved as text files.
 - `keywords_logs`: Directory containing keyword logs saved as JSON files.
 - `messages`: Directory containing message metadata saved as JSON files.
