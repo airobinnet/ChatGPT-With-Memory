@@ -24,11 +24,12 @@ This is a README for the AIROBIN chatbot script. The AIROBIN chatbot, standing f
 ## Usage
 
 1. Rename `example_config.py` to `config.py` and set up your OpenAI and Pinecone API keys.
-2. Install the required dependencies using `pip install openai pinecone numpy`.
-3. Run the script using `python main.py`.
-4. Enter your message when prompted with "USER:".
-5. The chatbot will generate a response and display it as "AIROBIN:".
-6. (Optional) In `main.py` set `debug = False` to enable debugging lines.
+2. In `config.py` choose the models you want to use `gpt-3.5-turbo` or `gpt-4`.
+3. Install the required dependencies using `pip install openai pinecone numpy`.
+4. Run the script using `python main.py`.
+5. Enter your message when prompted with "USER:".
+6. The chatbot will generate a response and display it as "AIROBIN:".
+7. (Optional) In `main.py` set `debug = False` to enable debugging lines.
 
 ## Files and directories
 
@@ -40,4 +41,6 @@ This is a README for the AIROBIN chatbot script. The AIROBIN chatbot, standing f
 - `prompt_response.txt`: Template for generating the prompt for GPT.
 
 ## Note
-This README assumes that you have already set up your OpenAI and Pinecone accounts and have the necessary API keys.
+A substantial amount of credit goes to https://github.com/daveshap/PineconeInfiniteMemoryChatbot for contributing major portions of the code.
+This README presumes that you have already established your OpenAI and Pinecone accounts and possess the required API keys. 
+GPT-4 is slower yet significantly more intelligent than GPT3-5-turbo. If your budget allows, opt for the gpt-4 model, as it is more advanced. 
