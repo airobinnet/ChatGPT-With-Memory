@@ -28,6 +28,7 @@ This is a README for the AIROBIN chatbot script. The AIROBIN chatbot, standing f
 3. Run the script using `python main.py`.
 4. Enter your message when prompted with "USER:".
 5. The chatbot will generate a response and display it as "AIROBIN:".
+6. (Optional) In `main.py` set `debug = False` to enable debugging lines.
 
 ## Files and directories
 

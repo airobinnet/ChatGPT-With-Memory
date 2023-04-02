@@ -10,7 +10,7 @@ from uuid import uuid4
 import datetime
 import pinecone
 
-debug = True
+debug = False
 # Initialize OpenAI API
 openai.api_key = config.OPENAI_API_KEY
 
