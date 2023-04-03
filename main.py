@@ -218,7 +218,9 @@ def chat():
         #### load keywords
         keywords = "keywords: " + json.dumps(last_keywords)
         #### generate prompt
-        prompt = open_file('prompt_response.txt').replace('<<CONVERSATION>>', conversation).replace('<<MESSAGE>>', a).replace('<<MEMORY>>', keywords)
+        # set the date to dd/mm/yyyy hh:mm:ss
+        current_date = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        prompt = open_file('prompt_response.txt').replace('<<CONVERSATION>>', conversation).replace('<<MESSAGE>>', a).replace('<<MEMORY>>', keywords).replace('<<DATE>>', current_date)
         #### generate response, vectorize, save, etc
         #output = gpt3_completion(prompt) # gpt3 and lower
         # gpt3.5 and higher
@@ -242,9 +244,7 @@ def chat():
         save_json('messages/%s.json' % unique_id, metadata)
         payload.append((unique_id, vector))
         exponential_backoff(vdb.upsert ,payload, namespace='AIROBIN')
-        print('\nAIROBIN: %s' % output) 
-        # Add your existing main code here, replacing the input() function with user_input
-        # Replace print('\nAIROBIN: %s' % output) with the following line
+        if debug: print('\nAIROBIN: %s' % output) 
         return jsonify({'airobin_response': output})
 
 if __name__ == '__main__':

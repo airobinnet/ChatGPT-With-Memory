@@ -42,9 +42,23 @@
             color: #721c24;
         }
         .retry-button {
+            display: inline-block;
             margin-left: 10px;
             cursor: pointer;
+            background-color: #ff0000;
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 14px;
+            text-align: center;
+            text-decoration: none;
+            transition: background-color 0.3s;
         }
+
+        .retry-button:hover {
+            background-color: #271717;
+        }
+
         textarea {
             resize: none;
         }
@@ -53,6 +67,20 @@
             margin: 0;
             overflow: auto;
             border-radius: 0.3em;
+        }
+        .loading-animation {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #007bff;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            100% {
+                transform: rotate(360deg);
+            }
         }
     </style>
 </head>
@@ -63,10 +91,13 @@
     <div class="mt-3">
         <form id="chat-form">
             <div class="input-group">
-                <textarea class="form-control" id="user-input" placeholder="Type your message here..." rows="2"></textarea>
+                <textarea class="form-control" id="user-input" placeholder="Type your message here..." rows="2" maxlength="1000"></textarea>
                 <div class="input-group-append">
                     <button type="submit" class="btn btn-primary"><i class="fa fa-send"></i></button>
                 </div>
+            </div>
+            <div class="mt-1">
+                <small class="text-muted" id="char-count">0/1000</small>
             </div>
         </form>
     </div>
@@ -87,7 +118,7 @@
             const messageRow = $('<div>').addClass('message-row');
             const messageElement = $('<div>').addClass('message ' + cssClass);
             if (cssClass === 'airobin-message') {
-                messageElement.html(formatAirobinMessage(message));
+                messageElement.html(message);
             } else {
                 messageElement.text(message);
             }
@@ -95,7 +126,8 @@
             messageRow.append(userElement).append(messageElement);
             if (retryButton) {
                 const retryBtn = $('<span>').addClass('retry-button').text('Retry').on('click', function() {
-                    messageRow.remove();
+                    messageRow.prev().remove(); // Remove the 2nd last user message
+                    messageRow.remove(); // Remove the current error message
                     sendMessage(lastUserInput);
                 });
                 messageElement.append(retryBtn);
@@ -109,6 +141,10 @@
         function sendMessage(userInput) {
             lastUserInput = userInput;
             addMessageToChat('USER', userInput, 'user-message');
+            $('#user-input').prop('disabled', true); // Disable user input
+            const loadingAnimation = $('<div>').addClass('loading-animation');
+            addMessageToChat('AIROBIN', loadingAnimation[0].outerHTML, 'airobin-message'); // Show loading animation
+
             $.ajax({
                 url: API_URL,
                 method: 'POST',
@@ -116,9 +152,13 @@
                 data: JSON.stringify({ user_input: userInput }),
                 success: function(response) {
                     const airobinResponse = response.airobin_response;
-                    addMessageToChat('AIROBIN', airobinResponse, 'airobin-message');
+                    $('#chat-container .airobin-message').last().html(formatAirobinMessage(airobinResponse)); // Replace loading animation with the response
+                    $('#user-input').prop('disabled', false); // Enable user input
                 },
                 error: function() {
+                    $('#chat-container .airobin-message').last().remove(); // Remove the loading animation
+                    $('.message-row').last().remove(); // Remove the last messagebubble
+                    $('#user-input').prop('disabled', false); // Enable user input
                     addMessageToChat('AIROBIN', 'Error: Unable to connect to the API.', 'error-message', true);
                 }
             });
@@ -143,6 +183,11 @@
                     $('#chat-form').submit();
                 }
             }
+        });
+
+        $('#user-input').on('input', function() {
+            const charCount = $(this).val().length;
+            $('#char-count').text(charCount + '/1000');
         });
     });
 </script>
