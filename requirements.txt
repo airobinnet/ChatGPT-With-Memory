@@ -1,0 +1,7 @@
+Flask
+Flask-Cors
+requests
+openai
+numpy
+regex
+pinecone-client
