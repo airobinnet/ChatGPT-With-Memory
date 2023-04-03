@@ -13,9 +13,11 @@ from uuid import uuid4
 import datetime
 import pinecone
 import random
+from operator import itemgetter
+import glob
 
 
-debug = False
+debug = True
 # Initialize OpenAI API
 openai.api_key = config.OPENAI_API_KEY
 
@@ -27,6 +29,16 @@ prompt_keywords_instructions = config.PROMPT_KEYWORDS_INSTRUCTIONS
 prompt_chat = config.PROMPT_CHAT
 chosen_model = config.CHATGPT_MODEL
 keyword_model = config.CHATGPT_MODEL_KEYWORDS
+
+# ANSI color codes for printing to console
+red = '\033[91m'     # soft red
+green = '\033[92m'   # soft green
+yellow = '\033[93m'  # soft yellow
+blue = '\033[94m'    # soft blue
+magenta = '\033[95m' # soft magenta
+cyan = '\033[96m'    # soft cyan
+white = '\033[97m'   # soft white
+reset = '\033[0m'    # reset color
 
 last_keywords = []
 
@@ -67,15 +79,25 @@ def load_json(filepath):
     with open(filepath, 'r', encoding='utf-8') as infile:
         return json.load(infile)
 
-
-def save_json(filepath, payload):
-    # Create the directory if it does not exist
-    directory = os.path.dirname(filepath)
-    if not os.path.exists(directory):
+def save_json(file_path, data):
+    directory = os.path.dirname(file_path)
+    if not os.path.exists(directory) and directory:
         os.makedirs(directory)
-    with open(filepath, 'w', encoding='utf-8') as outfile:
-        json.dump(payload, outfile, ensure_ascii=False, sort_keys=True, indent=2)
+    with open(file_path, 'w', encoding='utf-8') as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
 
+def update_index(index_file, username, message_metadata):
+    if os.path.exists(index_file):
+        index_data = load_json(index_file)
+    else:
+        index_data = {}
+
+    if username not in index_data:
+        index_data[username] = []
+
+    index_data[username].append(message_metadata)
+
+    save_json(index_file, index_data)
 
 def timestamp_to_datetime(unix_time):
     return datetime.datetime.fromtimestamp(unix_time).strftime("%A, %B %d, %Y at %I:%M%p %Z")
@@ -97,7 +119,7 @@ def chatgpt_completion(messages, prompt):
         os.makedirs('chat_logs')
     keywords = generate_keyword_list(prompt)
     last_keywords = keywords
-    save_file('chat_logs/%s' % filename, prompt + '\n\n==========\n\n' + text)
+    save_file('chat_logs/%s' % filename, prompt  + '\n' + text + '\n\n==========\n\n')
     # save keywords to a file
     if (last_keywords is not None):
         keyfilename = 'keywords_%d.json' % int(time())
@@ -119,10 +141,10 @@ def load_last_recent_keywords():
 last_keywords = load_last_recent_keywords()
 
 def generate_keyword_list(text):
-    if debug: print("generating keywords for: ", text)
+    if debug: print(red + "generating keywords for: ", text  + reset)
     response = exponential_backoff(openai.ChatCompletion.create ,model=keyword_model, messages=[{"role": "system", "content": prompt_keywords_instructions},{"role": "user", "content": "this is not a conversation, this is the text you need to convert to keywords: '" + text + "'"}], temperature=0)
     newtext = response['choices'][0]['message']['content']
-    if debug: print("keywords generated: ", newtext)
+    if debug: print(yellow + "keywords generated: ", newtext + reset)
     # check if text contains a json string
     json_string = extract_json_string(newtext)
     if json_string:
@@ -130,11 +152,11 @@ def generate_keyword_list(text):
             keywords = json.loads(json_string)
             return json.dumps(keywords)
         except:
-            if debug: print("Error: keywords not in json format")
-            if debug: print(json_string)
+            if debug: print(blue + "Error: keywords not in json format" + reset)
+            if debug: print(blue + json_string + reset)
             return None
     else:
-        if debug: print("Error: no JSON found in the text")
+        if debug: print(blue + "Error: no JSON found in the text" + reset)
         return None
 
 def extract_json_string(text):
@@ -171,6 +193,28 @@ def extract_json_string(text):
 
     return None
 
+def recent_conversations(username):
+    message_files = glob.glob("messages/*.json")
+    message_files.sort(key=os.path.getmtime, reverse=True)
+
+    recent_messages = []
+    for message_file in message_files:
+        message_data = load_json(message_file)
+        if message_data["speaker"] == username:
+            recent_messages.append(message_data)
+            if len(recent_messages) == 4:  # Changed from 3 to 4
+                break
+
+    recent_messages.pop(0)  # Skipping the most recent message
+
+    output = ""
+    for message in reversed(recent_messages):  # Reversed the order
+        msg_time = message['time']
+        message_time = datetime.datetime.fromtimestamp(float(msg_time))
+        output += f"({message_time.strftime('%Y-%m-%d %H:%M:%S')}) {message['speaker']}: {message['message']}\n"
+
+    return output
+
 def load_conversation(results):
     result = list()
     for m in results['matches']:
@@ -178,14 +222,15 @@ def load_conversation(results):
             info = load_json('messages/%s.json' % m['id'])
             result.append(info)
         except FileNotFoundError:
-            if debug: print("File not found: 'messages/%s.json'" % m['id'])
+            if debug: print(magenta + "File not found: 'messages/%s.json'" % m['id'] + reset)
     ordered = sorted(result, key=lambda d: d['time'], reverse=False)  # sort them all chronologically
     output = ""
     for i in ordered:
-        line = i['speaker'] + ': ' + i['message']
+        msg_time = i['time']
+        message_time = datetime.datetime.fromtimestamp(float(msg_time))
+        line = "(" + message_time.strftime('%Y-%m-%d %H:%M:%S') + ") " + i['speaker'] + ': ' + i['message']
         output += line + '\n'
     return output
-
 
 app = Flask(__name__)
 CORS(app)
@@ -193,8 +238,11 @@ CORS(app)
 @app.route('/chat', methods=['POST'])
 def chat():
     user_input = request.json.get('user_input')
+    username = request.json.get('username')
     if not user_input:
         return jsonify({'error': 'Missing user_input field in request data'}), 400
+    if not username:
+        return jsonify({'error': 'Missing username field in request data'}), 400
     convo_length = 30
     pinecone.init(api_key=pinecone_api_key, environment=pinecone_region)
     vdb = pinecone.Index(pinecone_index)
@@ -209,7 +257,7 @@ def chat():
         message = a
         vector = gpt3_embedding(message)
         unique_id = str(uuid4())
-        metadata = {'speaker': 'USER', 'time': timestamp, 'message': message, 'timestring': timestring, 'uuid': unique_id}
+        metadata = {'speaker': username, 'time': timestamp, 'message': message, 'timestring': timestring, 'uuid': unique_id}
         save_json('messages/%s.json' % unique_id, metadata)
         payload.append((unique_id, vector))
         #### search for relevant messages, and generate a response
@@ -220,7 +268,8 @@ def chat():
         #### generate prompt
         # set the date to dd/mm/yyyy hh:mm:ss
         current_date = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        prompt = open_file('prompt_response.txt').replace('<<CONVERSATION>>', conversation).replace('<<MESSAGE>>', a).replace('<<MEMORY>>', keywords).replace('<<DATE>>', current_date)
+        last_3_messages = recent_conversations(username)
+        prompt = open_file('prompt_response.txt').replace('<<CONVERSATION>>', conversation).replace('<<MESSAGE>>', username + ": " + a).replace('<<MEMORY>>', keywords).replace('<<DATE>>', current_date).replace('<<RECENT_MESSAGES>>', last_3_messages).replace('<<USERNAME>>', username)
         #### generate response, vectorize, save, etc
         #output = gpt3_completion(prompt) # gpt3 and lower
         # gpt3.5 and higher
@@ -244,7 +293,7 @@ def chat():
         save_json('messages/%s.json' % unique_id, metadata)
         payload.append((unique_id, vector))
         exponential_backoff(vdb.upsert ,payload, namespace='AIROBIN')
-        if debug: print('\nAIROBIN: %s' % output) 
+        if debug: print(cyan + '\nAIROBIN: %s' % output + reset) 
         return jsonify({'airobin_response': output})
 
 if __name__ == '__main__':

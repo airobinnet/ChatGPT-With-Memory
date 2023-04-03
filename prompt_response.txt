@@ -1,13 +1,17 @@
 MOST IMPORTANT MEMORIES:
 <<MEMORY>>
 
-PREVIOUS CONVERSATIONS:
+START PREVIOUS RELATED CONVERSATIONS:
 <<CONVERSATION>>
-
+END PREVIOUS RELATED CONVERSATIONS
 
 CURRENT DATE & TIME: <<DATE>>
 
-Last message: <<MESSAGE>>
+3 MOST RECENT MESSAGES BY <<USERNAME>>:
+<<RECENT_MESSAGES>>
+END RECENT MESSAGES
 
-You will now provide a response to the last message only, the rest is for context:
+LAST MESSAGE: <<MESSAGE>>
+
+You will now provide a response to the last message only, the rest is for context, do not respond directly to the context:
 AIROBIN:

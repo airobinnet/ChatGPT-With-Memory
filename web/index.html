@@ -102,9 +102,37 @@
         </form>
     </div>
 </div>
+
+<!-- Username Modal -->
+<div class="modal" tabindex="-1" role="dialog" id="username-modal">
+    <div class="modal-dialog" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Enter your username and pincode</h5>
+        </div>
+        <div class="modal-body">
+          <form id="username-form">
+            <div class="form-group">
+              <label for="username-input">Username</label>
+              <input type="text" class="form-control" id="username-input" placeholder="Enter your username" maxlength="20" pattern="^[a-zA-Z0-9_]*$" required>
+              <small class="form-text text-muted">Max 20 characters, no special characters except underscore.</small>
+            </div>
+            <div class="form-group">
+              <label for="pincode-input">Pincode</label>
+              <input type="password" class="form-control" id="pincode-input" placeholder="Enter your pincode" maxlength="4" pattern="^[0-9]*$" required>
+              <small class="form-text text-muted">4 digits only.</small>
+            </div>
+            <button type="submit" class="btn btn-primary">Submit</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
 <script>
     $(document).ready(function() {
         const API_URL = 'http://127.0.0.1:5001/chat';
+        const PINCODE_URL = 'pincodes.php';
 
         function formatAirobinMessage(message) {
             const codeRegex = /```([\s\S]*?)```/g;
@@ -112,6 +140,38 @@
                 return '<pre class="language-javascript"><code>' + Prism.highlight(code, Prism.languages.javascript, 'javascript') + '</code></pre>';
             });
         }
+
+        let username = '';
+
+        // Show the username modal
+        $('#username-modal').modal({
+            backdrop: 'static',
+            keyboard: false
+        });
+
+        // Handle the username form submission
+        $('#username-form').on('submit', function(event) {
+            event.preventDefault();
+            username = $('#username-input').val().trim();
+            const pincode = $('#pincode-input').val().trim();
+            if (username && pincode) {
+                $.ajax({
+                    url: PINCODE_URL,
+                    method: 'POST',
+                    data: { username: username, pincode: pincode },
+                    success: function(response) {
+                        if (response === 'success') {
+                            $('#username-modal').modal('hide');
+                        } else {
+                            alert('Invalid pincode. Please try again.');
+                        }
+                    },
+                    error: function() {
+                        alert('Error: Unable to connect to the server.');
+                    }
+                });
+            }
+        });
 
         function addMessageToChat(user, message, cssClass, retryButton = false) {
             const chatContainer = $('#chat-container');
@@ -140,7 +200,7 @@
 
         function sendMessage(userInput) {
             lastUserInput = userInput;
-            addMessageToChat('USER', userInput, 'user-message');
+            addMessageToChat(username, userInput, 'user-message');
             $('#user-input').prop('disabled', true); // Disable user input
             const loadingAnimation = $('<div>').addClass('loading-animation');
             addMessageToChat('AIROBIN', loadingAnimation[0].outerHTML, 'airobin-message'); // Show loading animation
@@ -149,7 +209,7 @@
                 url: API_URL,
                 method: 'POST',
                 contentType: 'application/json',
-                data: JSON.stringify({ user_input: userInput }),
+                data: JSON.stringify({ user_input: userInput, username: username }),
                 success: function(response) {
                     const airobinResponse = response.airobin_response;
                     $('#chat-container .airobin-message').last().html(formatAirobinMessage(airobinResponse)); // Replace loading animation with the response
