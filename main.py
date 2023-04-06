@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, make_response, request, jsonify
 from flask_cors import CORS
 import requests
 import config
@@ -193,7 +193,7 @@ def extract_json_string(text):
 
     return None
 
-def recent_conversations(username):
+def recent_conversations(username, amount):
     message_files = glob.glob("messages/*.json")
     message_files.sort(key=os.path.getmtime, reverse=True)
 
@@ -202,16 +202,26 @@ def recent_conversations(username):
         message_data = load_json(message_file)
         if message_data["speaker"] == username:
             recent_messages.append(message_data)
-            if len(recent_messages) == 4:  # Changed from 3 to 4
+            if len(recent_messages) == amount+1:
                 break
 
-    recent_messages.pop(0)  # Skipping the most recent message
+    recent_messages.pop(0)
 
     output = ""
-    for message in reversed(recent_messages):  # Reversed the order
+    for message in reversed(recent_messages):
         msg_time = message['time']
         message_time = datetime.datetime.fromtimestamp(float(msg_time))
         output += f"({message_time.strftime('%Y-%m-%d %H:%M:%S')}) {message['speaker']}: {message['message']}\n"
+
+        # Find the corresponding reply
+        reply_msgid = message['msgid']
+        for reply_file in message_files:
+            reply_data = load_json(reply_file)
+            if reply_data["speaker"] == "AIROBIN" and reply_data.get("target") == username and reply_data["msgid"] == reply_msgid:
+                reply_time = reply_data['time']
+                reply_message_time = datetime.datetime.fromtimestamp(float(reply_time))
+                output += f"({reply_message_time.strftime('%Y-%m-%d %H:%M:%S')}) {reply_data['speaker']}: {reply_data['message']}\n\n"
+                break
 
     return output
 
@@ -235,15 +245,20 @@ def load_conversation(results):
 app = Flask(__name__)
 CORS(app)
 
-@app.route('/chat', methods=['POST'])
+@app.route('/chat', methods=['POST', "OPTIONS"])
 def chat():
+    if request.method == "OPTIONS":  # CORS preflight
+        return _build_cors_preflight_response()
     user_input = request.json.get('user_input')
     username = request.json.get('username')
     if not user_input:
         return jsonify({'error': 'Missing user_input field in request data'}), 400
     if not username:
         return jsonify({'error': 'Missing username field in request data'}), 400
-    convo_length = 30
+    # setting the convo_length to 20, but this can be changed later if gpt4 offers more tokens
+    # if you get too many errors that the prompt is too long, you can reduce this number
+    # but this will also reduce the 'memory' of the past conversations
+    convo_length = 20
     pinecone.init(api_key=pinecone_api_key, environment=pinecone_region)
     vdb = pinecone.Index(pinecone_index)
     vdb
@@ -256,8 +271,9 @@ def chat():
         #message = '%s: %s - %s' % ('USER', timestring, a)
         message = a
         vector = gpt3_embedding(message)
+        msg_id = str(uuid4())
         unique_id = str(uuid4())
-        metadata = {'speaker': username, 'time': timestamp, 'message': message, 'timestring': timestring, 'uuid': unique_id}
+        metadata = {'speaker': username, 'time': timestamp, 'message': message, 'timestring': timestring, 'uuid': unique_id, 'msgid': msg_id}
         save_json('messages/%s.json' % unique_id, metadata)
         payload.append((unique_id, vector))
         #### search for relevant messages, and generate a response
@@ -268,11 +284,9 @@ def chat():
         #### generate prompt
         # set the date to dd/mm/yyyy hh:mm:ss
         current_date = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        last_3_messages = recent_conversations(username)
+        last_3_messages = recent_conversations(username, 3)
         prompt = open_file('prompt_response.txt').replace('<<CONVERSATION>>', conversation).replace('<<MESSAGE>>', username + ": " + a).replace('<<MEMORY>>', keywords).replace('<<DATE>>', current_date).replace('<<RECENT_MESSAGES>>', last_3_messages).replace('<<USERNAME>>', username)
         #### generate response, vectorize, save, etc
-        #output = gpt3_completion(prompt) # gpt3 and lower
-        # gpt3.5 and higher
         messages = [ 
             {
                 "role": "system",
@@ -289,12 +303,27 @@ def chat():
         message = output
         vector = gpt3_embedding(message)
         unique_id = str(uuid4())
-        metadata = {'speaker': 'AIROBIN', 'time': timestamp, 'message': message, 'timestring': timestring, 'uuid': unique_id}
+        metadata = {'speaker': 'AIROBIN', 'target': username, 'time': timestamp, 'message': message, 'timestring': timestring, 'uuid': unique_id, 'msgid': msg_id}
         save_json('messages/%s.json' % unique_id, metadata)
         payload.append((unique_id, vector))
         exponential_backoff(vdb.upsert ,payload, namespace='AIROBIN')
         if debug: print(cyan + '\nAIROBIN: %s' % output + reset) 
-        return jsonify({'airobin_response': output})
+        if request.method == "POST": # The actual request following the preflight
+            return _corsify_actual_response(jsonify({'airobin_response': output}))
+        else:
+            raise RuntimeError("Weird - don't know how to handle method {}".format(request.method))
+
+def _build_cors_preflight_response():
+    response = make_response()
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add('Access-Control-Allow-Headers', "*")
+    response.headers.add('Access-Control-Allow-Methods', "*")
+    response.status_code = 200
+    return response
+
+def _corsify_actual_response(response):
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
