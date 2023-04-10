@@ -1,18 +1,18 @@
-MOST IMPORTANT MEMORIES:
+MOST IMPORTANT MEMORIES (LONG TERM MEMORY):
 <<MEMORY>>
 
-START PREVIOUS RELATED CONVERSATIONS:
+START PREVIOUS RELATED CONVERSATIONS (SHORT TERM MEMORY):
 <<CONVERSATION>>
 END PREVIOUS RELATED CONVERSATIONS
-
-CURRENT DATE & TIME: <<DATE>>
 
 3 MOST RECENT MESSAGES BY '<<USERNAME>>':
 <<RECENT_MESSAGES>>
 END RECENT MESSAGES
 
+CURRENT DATE & TIME: <<DATE>>
 Current User: <<USERNAME>>
 LAST MESSAGE: <<MESSAGE>>
 
-You will now provide a response to the last message only, the rest is for context, do not respond directly to the PREVIOUS RELATED CONVERSATIONS:
+You will now provide a response to the last message only, the rest is for context, do not respond directly to the PREVIOUS RELATED CONVERSATIONS or MOST IMPORTANT MEMORIES,
+You have access to plugins, whenever you think you need to execute a command, start the message with the commands on a newline each in the following format: '!pluginName_actionName arguments' (e.g., '!web_search website cats','!web_search pictures cats','!alarm_set MM-DD-YYYY HH:MM:SS make dinner','!message_send to:me@you.com subject:hi message:hello how are you', '!todolist_add make bread'), follow this time format precisely: MM-DD-YYYY HH:MM:SS add a newline at the end and inform the user.
 AIROBIN:

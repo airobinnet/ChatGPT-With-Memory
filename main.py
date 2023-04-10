@@ -29,6 +29,8 @@ prompt_keywords_instructions = config.PROMPT_KEYWORDS_INSTRUCTIONS
 prompt_chat = config.PROMPT_CHAT
 chosen_model = config.CHATGPT_MODEL
 keyword_model = config.CHATGPT_MODEL_KEYWORDS
+pinecone_namespace = config.PINECONE_NAMESPACE
+max_reply_tokens = config.MAX_REPLY_TOKENS
 
 # ANSI color codes for printing to console
 red = '\033[91m'     # soft red
@@ -112,7 +114,7 @@ def gpt3_embedding(content, engine='text-embedding-ada-002'):
 def chatgpt_completion(messages, prompt):
     model=chosen_model
     global last_keywords
-    response = exponential_backoff(openai.ChatCompletion.create, model=model, messages=messages)
+    response = exponential_backoff(openai.ChatCompletion.create, model=model, messages=messages, max_tokens = max_reply_tokens)
     text = response['choices'][0]['message']['content']
     filename = 'chat_%s_gpt3.txt' % time()
     if not os.path.exists('chat_logs'):
@@ -142,7 +144,7 @@ last_keywords = load_last_recent_keywords()
 
 def generate_keyword_list(text):
     if debug: print(red + "generating keywords for: ", text  + reset)
-    response = exponential_backoff(openai.ChatCompletion.create ,model=keyword_model, messages=[{"role": "system", "content": prompt_keywords_instructions},{"role": "user", "content": "this is not a conversation, this is the text you need to convert to keywords: '" + text + "'"}], temperature=0)
+    response = exponential_backoff(openai.ChatCompletion.create ,model=keyword_model, messages=[{"role": "system", "content": prompt_keywords_instructions},{"role": "user", "content": "this is not a conversation, this is the text you need to convert to long term memory-keywords: '" + text + "'"}], temperature=0)
     newtext = response['choices'][0]['message']['content']
     if debug: print(yellow + "keywords generated: ", newtext + reset)
     # check if text contains a json string
@@ -277,7 +279,7 @@ def chat():
         save_json('messages/%s.json' % unique_id, metadata)
         payload.append((unique_id, vector))
         #### search for relevant messages, and generate a response
-        results = vdb.query(vector=vector, top_k=convo_length, namespace='AIROBIN')
+        results = vdb.query(vector=vector, top_k=convo_length, namespace=pinecone_namespace)
         conversation = load_conversation(results)  # results should be a DICT with 'matches' which is a LIST of DICTS, with 'id'
         #### load keywords
         keywords = "keywords: " + json.dumps(last_keywords)
@@ -306,7 +308,7 @@ def chat():
         metadata = {'speaker': 'AIROBIN', 'target': username, 'time': timestamp, 'message': message, 'timestring': timestring, 'uuid': unique_id, 'msgid': msg_id}
         save_json('messages/%s.json' % unique_id, metadata)
         payload.append((unique_id, vector))
-        exponential_backoff(vdb.upsert ,payload, namespace='AIROBIN')
+        exponential_backoff(vdb.upsert ,payload, namespace=pinecone_namespace)
         if debug: print(cyan + '\nAIROBIN: %s' % output + reset) 
         if request.method == "POST": # The actual request following the preflight
             return _corsify_actual_response(jsonify({'airobin_response': output}))
