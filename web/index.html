@@ -10,7 +10,8 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.16.0/umd/popper.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.25.0/prism.min.js"></script>
+    <script src="prism.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.js" integrity="sha512-xbQU0+iHqhVt7VIXi6vBJKPh3IQBF5B84sSHdjKiSccyX/1ZI7Vnkt2/8y8uruj63/DVmCxfUNohPNruthTEQA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <style>
         .chat-container {
             height: 70vh;
@@ -159,6 +160,22 @@
             width: 40px;
             border-radius: 5px;
         }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        tr:nth-child(even) {
+            background-color: #f8f8f8;
+        }
     </style>
 </head>
 <body>
@@ -225,6 +242,119 @@
   </div>
 
 <script>
+    const socket = io.connect('http://127.0.0.1:5001');
+
+    function parseMdL(md) {
+
+        //ul
+        md = md.replace(/^\s*\n\*/gm, '<ul>\n*');
+        md = md.replace(/^(\*.+)\s*\n([^\*])/gm, '$1\n</ul>\n\n$2');
+        md = md.replace(/^\*(.+)/gm, '<li>$1</li>');
+
+        //ol
+        md = md.replace(/^\s*\n\d\./gm, '<ol>\n1.');
+        md = md.replace(/^(\d\..+)\s*\n([^\d\.])/gm, '$1\n</ol>\n\n$2');
+        md = md.replace(/^\d\.(.+)/gm, '<li>$1</li>');
+
+        //blockquote
+        md = md.replace(/^\>(.+)/gm, '<blockquote>$1</blockquote>');
+
+        //h
+        md = md.replace(/(^|\n)[\#]{6}(.+)/g, '$1<h6>$2</h6>');
+        md = md.replace(/(^|\n)[\#]{5}(.+)/g, '$1<h5>$2</h5>');
+        md = md.replace(/(^|\n)[\#]{4}(.+)/g, '$1<h4>$2</h4>');
+        md = md.replace(/(^|\n)[\#]{3}(.+)/g, '$1<h3>$2</h3>');
+        md = md.replace(/(^|\n)[\#]{2}(.+)/g, '$1<h2>$2</h2>');
+        md = md.replace(/(^|\n)[\#]{1}(.+)/g, '$1<h1>$2</h1>');
+
+        //alt h
+        md = md.replace(/^(.+)\n\=+/gm, '<h1>$1</h1>');
+        md = md.replace(/^(.+)\n(?<!- )\-+/gm, '<h2>$1</h2>');
+
+        //images
+        md = md.replace(/\!\[([^\]]+)\]\(([^\)]+)\)/g, '<img src="$2" alt="$1" />');
+
+        //font styles
+        md = md.replace(/[\*\_]{2}([^\*\_]+)[\*\_]{2}/g, '<b>$1</b>');
+        md = md.replace(/[\*\_]{1}([^\*\_]+)[\*\_]{1}/g, '<i>$1</i>');
+        md = md.replace(/[\~]{2}([^\~]+)[\~]{2}/g, '<del>$1</del>');
+
+        //pre
+        md = md.replace(/^\s*\n\`\`\`(([^\s]+))?/gm, '<pre class="$2">');
+        md = md.replace(/^\`\`\`\s*\n/gm, '</pre>\n\n');
+
+        //code
+        md = md.replace(/[\`]{1}([^\`]+)[\`]{1}/g, '<code>$1</code>');
+
+        //strip p from pre
+        md = md.replace(/(\<pre.+\>)\s*\n\<p\>(.+)\<\/p\>/gm, '$1$2');
+
+        // Parse reference-style links
+        const refLinks = {};
+        md = md.replace(/^\[\^([^\]]+)\]:\s+\(([^)]+)\)$/gm, (match, key, url) => {
+            refLinks[key] = url;
+            return "";
+        });
+
+        // Replace links using the parsed reference-style links
+        md = md.replace(/\[\^([^\]]+)\]/g, (match, key) => {
+            const url = refLinks[key] || "#";
+            return `<a href="${url}" target="_blank">${key}</a>`;
+        });
+
+        // Parse normal links
+        md = md.replace(/[\[]{1}([^\]]+)[\]]{1}[\(]{1}([^\)\"]+)(\"(.+)\")?[\)]{1}/g, '<a href="$2" target="_blank" title="$4">$1</a>');
+
+        // table
+        md = md.replace(/((?:\|[^|\n]+)+\|\n(?:\|[-: ]+)+\|\n(?:(?:\|[^|\n]+)+\|?\n?)+)/g, function (m, table) {
+            const rows = table.trim().split('\n');
+            let html = '<table>';
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
+                const isHeader = i === 0;
+                const isSeparator = i === 1;
+                const tag = isHeader ? 'th' : 'td';
+                const cells = row.split('|').slice(1, -1);
+
+                // Skip the separator row
+                if (isSeparator) continue;
+
+                html += '<tr>';
+                for (const cell of cells) {
+                    html += `<${tag}>${cell.trim()}</${tag}>`;
+                }
+                html += '</tr>';
+            }
+            html += '</table>';
+            return html;
+        });
+
+        // p
+        md = md.replace(/^\s*(\n)?(.+)/gm, function(m){
+            return  /\<(\/)?(h\d|ul|ol|li|blockquote|pre|img|table|tr|th|td)/.test(m) ? m : '<p>'+m+'</p>';
+        });
+
+        return md;
+    }
+
+
+    socket.on('progress', (data) => {
+        console.log('Progress:', data.message);
+        addMessageToChat('AIROBIN', data.message, 'error-message', false);
+    });
+
+    socket.on('connect', () => {
+        console.log('Connected to the server');
+    });
+
+    socket.on('disconnect', () => {
+        console.log('Disconnected from the server');
+    });
+
+    socket.on('progress', (data) => {
+        console.log('Progress:', data.message);
+    });
+
     document.querySelector('#push').onclick = function(){
         if(document.querySelector('#newtask input').value.length == 0){
             alert("Please Enter a Task")
@@ -251,11 +381,111 @@
         }
     }
 
+    function addMessageToChat(user, message, cssClass, retryButton = false) {
+            const chatContainer = $('#chat-container');
+            const messageRow = $('<div>').addClass('message-row');
+            const messageElement = $('<div>').addClass('message ' + cssClass);
+
+            // Check if the message contains an alarm, reminder, or todo list command
+            const alarmRegex = /!alarm_set (\d{2}[\/-]\d{2}[\/-]\d{4} \d{2}:\d{2}:\d{2})(?: (.*))?/;
+            const reminderRegex = /!reminder_set (\d{2}[\/-]\d{2}[\/-]\d{4} \d{2}:\d{2}:\d{2})(?: (.*))?/;
+            const todoListAddRegex = /!todolist_add (.+)/;
+            const todoListDeleteRegex = /!todolist_delete (.+)/;
+            const todoListCheckRegex = /!todolist_check (.+)/;
+
+            const alarmMatch = message.match(alarmRegex);
+            const reminderMatch = message.match(reminderRegex);
+            const todoListAddMatch = message.match(todoListAddRegex);
+            const todoListDeleteMatch = message.match(todoListDeleteRegex);
+            const todoListCheckMatch = message.match(todoListCheckRegex);
+
+            if (alarmMatch || reminderMatch) {
+                console.log('Found alarm/reminder');
+                const dateTime = alarmMatch ? alarmMatch[1] : reminderMatch[1];
+                const alarmMessage = alarmMatch ? alarmMatch[2] || 'Alarm!': (reminderMatch[2] || 'Reminder!');
+
+                // Convert the date to a specific format (with dashes) and swap date and month values
+                const dateParts = dateTime.split(/[-/]/);
+                const formattedDateTime = `${dateParts[1]}-${dateParts[0]}-${dateParts[2]}`;
+                console.log('Formatted date: ' + formattedDateTime);
+                const targetTime = new Date(formattedDateTime);
+                console.log('Target time: ' + targetTime);
+                const currentTime = new Date();
+                console.log('Current time: ' + currentTime);
+                const timeDifference = targetTime.getTime() - currentTime.getTime();
+                console.log('Time difference: ' + timeDifference);
+                if (timeDifference > 0) {
+                    setTimeout(() => {
+                        addMessageToChat('Reminder', alarmMessage, 'reminder-message');
+                        console.log('Alarm/Reminder triggered: ' + alarmMessage);
+                    }, timeDifference);
+                }
+
+                // Remove the alarm/reminder string from the message
+                message = message.replace(alarmRegex, '').replace(reminderRegex, '').trim();
+            }
+            if (todoListAddMatch) {
+                const taskName = todoListAddMatch[1];
+                document.querySelector('#tasks').innerHTML += `
+                    <div class="task">
+                        <span id="taskname">
+                            ${taskName}
+                        </span>
+                        <button class="delete">
+                            <i class="fa-regular fa-trash"></i>
+                        </button>
+                    </div>
+                `;
+                message = message.replace(todoListAddRegex, '').trim();
+            }
+
+            if (todoListDeleteMatch) {
+                const taskName = todoListDeleteMatch[1];
+                const tasks = document.querySelectorAll('#tasks .task .taskname');
+                tasks.forEach(task => {
+                    if (task.textContent === taskName) {
+                        task.parentNode.remove();
+                    }
+                });
+                message = message.replace(todoListDeleteRegex, '').trim();
+            }
+
+            if (todoListCheckMatch) {
+                const taskName = todoListCheckMatch[1];
+                const tasks = document.querySelectorAll('#tasks .task .taskname');
+                tasks.forEach(task => {
+                    if (task.textContent === taskName) {
+                        task.style.textDecoration = 'line-through';
+                    }
+                });
+                message = message.replace(todoListCheckRegex, '').trim();
+            }
+
+            if (cssClass === 'airobin-message') {
+                messageElement.html(message);
+            } else {
+                messageElement.text(message);
+            }
+            const userElement = $('<strong>').text(user + ': ');
+            messageRow.append(userElement).append(messageElement);
+            if (retryButton) {
+                const retryBtn = $('<span>').addClass('retry-button').text('Retry').on('click', function() {
+                    messageRow.prev().remove(); // Remove the 2nd last user message
+                    messageRow.remove(); // Remove the current error message
+                    sendMessage(lastUserInput);
+                });
+                messageElement.append(retryBtn);
+            }
+            chatContainer.append(messageRow);
+            chatContainer.scrollTop(chatContainer[0].scrollHeight);
+        }
+
     $(document).ready(function() {
         const API_URL = 'http://127.0.0.1:5001/chat';
         const PINCODE_URL = 'pincodes.php';
 
         function formatAirobinMessage(message) {
+            message = parseMdL(message);
             // Check if the message contains an alarm, reminder, or todo list command
             const alarmRegex = /!alarm_set (\d{2}[\/-]\d{2}[\/-]\d{4} \d{2}:\d{2}:\d{2})(?: (.*))?/;
             const reminderRegex = /!reminder_set (\d{2}[\/-]\d{2}[\/-]\d{4} \d{2}:\d{2}:\d{2})(?: (.*))?/;

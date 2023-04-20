@@ -1,5 +1,6 @@
 from flask import Flask, make_response, request, jsonify
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 import requests
 import config
 import os
@@ -15,9 +16,13 @@ import pinecone
 import random
 from operator import itemgetter
 import glob
+from plugins.websearch import websearch, webvisit
+from  processing import (open_file, save_file, load_json, save_json, update_index, timestamp_to_datetime, 
+                         load_last_recent_keywords, load_conversation, extract_json_string, recent_conversations
+                         )
+from ansicolors import red, green, yellow, blue, magenta, cyan, white, reset, pink, purple
 
-
-debug = True
+debug = config.DEBUG
 # Initialize OpenAI API
 openai.api_key = config.OPENAI_API_KEY
 
@@ -25,24 +30,23 @@ openai.api_key = config.OPENAI_API_KEY
 pinecone_api_key = config.PINECONE_API
 pinecone_region = config.PINECONE_REGION
 pinecone_index = config.PINECONE_INDEX
+
+# Initialize google search API
+google_api_key = config.GOOGLE_CSE_API
+google_cx = config.GOOGLE_CSE_ID
+
 prompt_keywords_instructions = config.PROMPT_KEYWORDS_INSTRUCTIONS
+prompt_search = config.PROMPT_SEARCH
 prompt_chat = config.PROMPT_CHAT
 chosen_model = config.CHATGPT_MODEL
 keyword_model = config.CHATGPT_MODEL_KEYWORDS
 pinecone_namespace = config.PINECONE_NAMESPACE
 max_reply_tokens = config.MAX_REPLY_TOKENS
-
-# ANSI color codes for printing to console
-red = '\033[91m'     # soft red
-green = '\033[92m'   # soft green
-yellow = '\033[93m'  # soft yellow
-blue = '\033[94m'    # soft blue
-magenta = '\033[95m' # soft magenta
-cyan = '\033[96m'    # soft cyan
-white = '\033[97m'   # soft white
-reset = '\033[0m'    # reset color
+prompt_thoughts = config.PROMPT_THOUGHTS
 
 last_keywords = []
+
+retries = 0
 
 # take another function as an argument and handles the retries with exponential backoff.
 # preventing the script from crashing due to temporary connection issues
@@ -63,47 +67,6 @@ def exponential_backoff(func, *args, **kwargs):
             retries += 1
             sleep(delay)
 
-def open_file(filepath):
-    with open(filepath, 'r', encoding='utf-8') as infile:
-        return infile.read()
-
-
-def save_file(filepath, content):
-    # Create the directory if it does not exist
-    directory = os.path.dirname(filepath)
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-    with open(filepath, 'w', encoding='utf-8') as outfile:
-        outfile.write(content)
-
-
-def load_json(filepath):
-    with open(filepath, 'r', encoding='utf-8') as infile:
-        return json.load(infile)
-
-def save_json(file_path, data):
-    directory = os.path.dirname(file_path)
-    if not os.path.exists(directory) and directory:
-        os.makedirs(directory)
-    with open(file_path, 'w', encoding='utf-8') as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
-
-def update_index(index_file, username, message_metadata):
-    if os.path.exists(index_file):
-        index_data = load_json(index_file)
-    else:
-        index_data = {}
-
-    if username not in index_data:
-        index_data[username] = []
-
-    index_data[username].append(message_metadata)
-
-    save_json(index_file, index_data)
-
-def timestamp_to_datetime(unix_time):
-    return datetime.datetime.fromtimestamp(unix_time).strftime("%A, %B %d, %Y at %I:%M%p %Z")
-
 
 def gpt3_embedding(content, engine='text-embedding-ada-002'):
     content = content.encode(encoding='ASCII',errors='ignore').decode()  # fix any UNICODE errors
@@ -111,40 +74,165 @@ def gpt3_embedding(content, engine='text-embedding-ada-002'):
     vector = response['data'][0]['embedding']  # this is a normal list
     return vector
 
-def chatgpt_completion(messages, prompt):
+def parse_input(input_str):
+    search_pattern = r'\[SEARCH(ING)? FOR (.+?)\]'
+    visit_pattern = r'\[VISIT(ING)? WEBSITE (.+?)\]'
+    continue_pattern = r'\[CONTINUE\]'
+    summary_pattern = r'\[SUMMARY (.*?)(?=\n|$)\]'
+    new_summary_pattern = r'\[CONTINUE\](?:\s*|\n)*\[SUMMARY (.+?)\]'
+
+
+    search_matches = re.findall(search_pattern, input_str)
+    visit_matches = re.findall(visit_pattern, input_str)
+    continue_matches = re.findall(continue_pattern, input_str)
+    summary_matches = re.findall(summary_pattern, input_str)
+    new_summary_matches = re.findall(new_summary_pattern, input_str, re.DOTALL)
+
+    actions = []
+
+    for match in search_matches:
+        actions.append({"action": "search", "value": match[1]})
+
+    for match in visit_matches:
+        actions.append({"action": "visit", "value": match[1]})
+
+    for _ in continue_matches:
+        actions.append({"action": "continue"})
+
+    for match in summary_matches:
+        actions.append({"action": "summary", "value": match[0]})
+
+    for match in new_summary_matches:
+        actions.append({"action": "summary", "value": match})
+
+    return actions
+
+def chatgpt_process_thoughts(socketio, question, searchresult, searchquery, summary, nr):
+    global retries
+    if nr > 3:
+        retries = 0
+        return summary
+    else:
+        nr += 1
+        retries = nr
+        final_response = ''
+        current_date = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        thought_process = prompt_thoughts.replace('<<QUESTION>>', question).replace('<<SEARCH_QUERY>>', searchquery).replace('<<SEARCH_DATA>>', searchresult).replace('<<SUMMARY>>', summary).replace('<<DATE>>', current_date)
+        messages = [ 
+                {
+                    "role": "user",
+                    "content": thought_process
+                }
+            ]
+        if debug: print(pink + "thought process: ", thought_process + reset)
+        new_response = exponential_backoff(openai.ChatCompletion.create, model=chosen_model, messages=messages, max_tokens = 2000, temperature=0.1)
+        result = new_response['choices'][0]['message']['content']
+        if debug: print(pink + "new response: ", result + reset)
+        actions = parse_input(result)
+        search_output = ""
+        visit_output = ""
+        continue_output = ""
+        summary_output = ""
+
+        for action in actions:
+            if action['action'] == 'search':
+                search_output = f"[SEARCHING FOR {action['value']}]"
+            elif action['action'] == 'visit':
+                visit_output = f"[VISIT WEBSITE {action['value']}]"
+            elif action['action'] == 'continue':
+                continue_output = "Continuing...\n"
+            elif action['action'] == 'summary':
+                summary_output = action['value']
+            else:
+                print("Invalid action")
+
+        if search_output:
+            output = chatgpt_online(socketio, search_output, "", "", question, True, str(summary_output))
+        elif visit_output:
+            output = chatgpt_online(socketio, visit_output, "", "", question, False, str(summary_output))
+        elif continue_output:
+            output = summary_output
+        else:
+            output = ""
+
+        return output
+
+def chatgpt_online(socketio, query, prompt, messages, message=None, search=False, summary=""):
+    global retries
+    # if the response is a websearch command, then we need to do process it
+    if search:
+        if debug: print(green + "found websearch command: ", query + reset)
+        # get the search output from the response, text is in format [SEARCHING FOR <search term>]
+        # output is top x search results + a excerpt from the x'th result
+        searchdata = websearch(query, google_api_key, google_cx)
+        # if debug: print(green + "search data: ", searchdata + reset)
+        current_date = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        full_search_prompt = prompt_search.replace('<<SEARCH_DATA>>', searchdata).replace('<<QUESTION>>', message).replace('<<SUMMARY>>', summary).replace('<<DATE>>', current_date)
+        if debug: print(green + "full search prompt: ", full_search_prompt + reset)
+        messages = [ 
+            {
+                "role": "user",
+                "content": full_search_prompt
+            }
+        ]
+        # get a new response from the chatbot based on the search results
+        new_response = exponential_backoff(openai.ChatCompletion.create, model=chosen_model, messages=messages, max_tokens = max_reply_tokens, temperature=0.1)
+        text = new_response['choices'][0]['message']['content']
+        result = chatgpt_process_thoughts(socketio, message, searchdata, query, text, retries)
+        return result
+    else:
+        if debug: print(green + "found webvisit command: ", query + reset)
+        webdata = webvisit(query)
+        messages = [ 
+            {
+                "role": "user",
+                "content": message + "\n" + webdata
+            }
+        ]
+        new_response = exponential_backoff(openai.ChatCompletion.create, model=chosen_model, messages=messages, max_tokens = max_reply_tokens, temperature=0.1)
+        text = new_response['choices'][0]['message']['content']
+        result = chatgpt_process_thoughts(socketio, message, "", query, text, retries)
+        return result
+
+def chatgpt_completion(socketio, messages, prompt, message=None):
+    # messages = json
+    # prompt = prompt_response with replaced strings
+    # message = most recent message from user
     model=chosen_model
     global last_keywords
-    response = exponential_backoff(openai.ChatCompletion.create, model=model, messages=messages, max_tokens = max_reply_tokens)
+    response = exponential_backoff(openai.ChatCompletion.create, model=model, messages=messages, max_tokens = max_reply_tokens, temperature=0.1)
+    # the response is either normal text or a command
     text = response['choices'][0]['message']['content']
+    # check if the response is a command
+    pattern = r'\[(?:SEARCH|SEARCHING) FOR (.+)\]'
+    websearch_match = re.match(pattern, text)
+    pattern2 = r'\[(?:VISIT|VISITING) WEBSITE (.+)\]'
+    webvisit_match = re.match(pattern2, text)
+    # if the response is a websearch command, then we need to do process it
+    if websearch_match:
+        #query = websearch_match.group(1)
+        text = chatgpt_online(socketio, text, prompt, messages, message, True)
+    if webvisit_match:
+        #query = webvisit_match.group(1)
+        text = chatgpt_online(socketio, text, prompt, messages, message, False)
     filename = 'chat_%s_gpt3.txt' % time()
     if not os.path.exists('chat_logs'):
         os.makedirs('chat_logs')
     keywords = generate_keyword_list(prompt)
     last_keywords = keywords
-    save_file('chat_logs/%s' % filename, prompt  + '\n' + text + '\n\n==========\n\n')
+    save_file('chat_logs/%s' % filename, prompt  + '\n' + str(text) + '\n\n==========\n\n')
     # save keywords to a file
     if (last_keywords is not None):
         keyfilename = 'keywords_%d.json' % int(time())
         save_file('keywords_logs/%s' % keyfilename, last_keywords)
     return text
 
-def load_last_recent_keywords():
-    keywords_dir = 'keywords_logs'
-    if not os.path.exists(keywords_dir):
-        return []
-
-    files = [os.path.join(keywords_dir, f) for f in os.listdir(keywords_dir) if os.path.isfile(os.path.join(keywords_dir, f))]
-    if not files:
-        return []
-
-    latest_file = max(files, key=os.path.getctime)
-    return json.loads(open_file(latest_file))
-
 last_keywords = load_last_recent_keywords()
 
 def generate_keyword_list(text):
-    if debug: print(red + "generating keywords for: ", text  + reset)
-    response = exponential_backoff(openai.ChatCompletion.create ,model=keyword_model, messages=[{"role": "system", "content": prompt_keywords_instructions},{"role": "user", "content": "this is not a conversation, this is the text you need to convert to long term memory-keywords: '" + text + "'"}], temperature=0)
+    if debug: print(white + "\ngenerating keywords for: ", text  + "\n==========================================================" + reset)
+    keyword_prompt = prompt_keywords_instructions.replace('<<INPUT_TEXT>>', text)
+    response = exponential_backoff(openai.ChatCompletion.create ,model=keyword_model, messages=[{"role": "system", "content": prompt_keywords_instructions},{"role": "user", "content": keyword_prompt}], temperature=0.1)
     newtext = response['choices'][0]['message']['content']
     if debug: print(yellow + "keywords generated: ", newtext + reset)
     # check if text contains a json string
@@ -161,91 +249,9 @@ def generate_keyword_list(text):
         if debug: print(blue + "Error: no JSON found in the text" + reset)
         return None
 
-def extract_json_string(text):
-    # Find the starting and ending indices of the JSON string
-    start_index = text.find('{')
-    end_index = text.rfind('}')
-
-    if start_index != -1 and end_index != -1:
-        json_string = text[start_index:end_index + 1]
-
-        # Replace escaped double quotes with regular double quotes
-        json_string = json_string.replace('\\"', '"')
-
-        try:
-            json.loads(json_string)
-            return json_string
-        except json.JSONDecodeError:
-            pass
-
-    # Fallback to the regular expression method
-    json_string = re.search(r'\{(?:[^{}]|"(?:\\.|[^"\\])*")*\}', text)
-
-    if json_string:
-        json_string = json_string.group()
-
-        # Replace escaped double quotes with regular double quotes
-        json_string = json_string.replace('\\"', '"')
-
-        try:
-            json.loads(json_string)
-            return json_string
-        except json.JSONDecodeError:
-            pass
-
-    return None
-
-def recent_conversations(username, amount):
-    message_files = glob.glob("messages/*.json")
-    message_files.sort(key=os.path.getmtime, reverse=True)
-
-    recent_messages = []
-    for message_file in message_files:
-        message_data = load_json(message_file)
-        if message_data["speaker"] == username:
-            recent_messages.append(message_data)
-            if len(recent_messages) == amount+1:
-                break
-
-    recent_messages.pop(0)
-
-    output = ""
-    for message in reversed(recent_messages):
-        msg_time = message['time']
-        message_time = datetime.datetime.fromtimestamp(float(msg_time))
-        output += f"({message_time.strftime('%Y-%m-%d %H:%M:%S')}) {message['speaker']}: {message['message']}\n"
-
-        # Find the corresponding reply
-        reply_msgid = message['msgid']
-        for reply_file in message_files:
-            reply_data = load_json(reply_file)
-            if reply_data["speaker"] == "AIROBIN" and reply_data.get("target") == username and reply_data["msgid"] == reply_msgid:
-                reply_time = reply_data['time']
-                reply_message_time = datetime.datetime.fromtimestamp(float(reply_time))
-                output += f"({reply_message_time.strftime('%Y-%m-%d %H:%M:%S')}) {reply_data['speaker']}: {reply_data['message']}\n\n"
-                break
-
-    return output
-
-def load_conversation(results):
-    result = list()
-    for m in results['matches']:
-        try:
-            info = load_json('messages/%s.json' % m['id'])
-            result.append(info)
-        except FileNotFoundError:
-            if debug: print(magenta + "File not found: 'messages/%s.json'" % m['id'] + reset)
-    ordered = sorted(result, key=lambda d: d['time'], reverse=False)  # sort them all chronologically
-    output = ""
-    for i in ordered:
-        msg_time = i['time']
-        message_time = datetime.datetime.fromtimestamp(float(msg_time))
-        line = "(" + message_time.strftime('%Y-%m-%d %H:%M:%S') + ") " + i['speaker'] + ': ' + i['message']
-        output += line + '\n'
-    return output
-
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 @app.route('/chat', methods=['POST', "OPTIONS"])
 def chat():
@@ -299,7 +305,7 @@ def chat():
                 "content": prompt
             }
         ]
-        output = chatgpt_completion(messages, prompt)
+        output = chatgpt_completion(socketio, messages, prompt, message)
         timestamp = time()
         timestring = timestamp_to_datetime(timestamp)
         message = output
@@ -328,4 +334,4 @@ def _corsify_actual_response(response):
     return response
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    socketio.run(app, debug=True, host='0.0.0.0', port=5001)

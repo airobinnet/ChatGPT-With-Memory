@@ -5,3 +5,5 @@ openai
 numpy
 regex
 pinecone-client
+beautifulsoup4
+googlesearch-python
