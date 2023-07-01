@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Page</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js" integrity="sha512-zAs8dHhwlTbfcVGRX1x0EZAH/L99NjAFzX6muwOcOJc7dbGFNaW4O7b9QOyCMRYBNjO+E0Kx6yLDsiPQhhWm7g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.25.0/prism.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: space-around;
+        }
+        #input-container {
+            width: 45%;
+        }
+        #output-container {
+            width: 45%;
+        }
+    </style>
+</head>
+<body>
+    <div id="input-container">
+        <textarea id="input" rows="20" cols="50"></textarea>
+        <button id="parseButton">Parse</button>
+    </div>
+    <div id="output-container">
+        <div id="output"></div>
+    </div>
+
+    <script>
+        var renderer = new marked.Renderer();
+            renderer.link = function(href, title, text) {
+                var link = marked.Renderer.prototype.link.apply(this, arguments);
+                return link.replace("<a","<a target='_blank'");
+            };
+
+            marked.setOptions({
+                renderer: renderer
+        });
+        function parseMarkdownWithCodeBlocks(text) {
+            const codeBlockRegex = /```[\s\S]*?```/g;
+            const codeBlocks = text.match(codeBlockRegex) || [];
+
+            const markdownWithoutCodeBlocks = text.replace(codeBlockRegex, 'CODE_BLOCK_PLACEHOLDER');
+            const htmlWithoutCodeBlocks = marked.parse(markdownWithoutCodeBlocks);
+
+            let finalHtml = htmlWithoutCodeBlocks;
+            codeBlocks.forEach((codeBlock) => {
+                finalHtml = finalHtml.replace('CODE_BLOCK_PLACEHOLDER', codeBlock);
+            });
+
+            
+            // Regular expression to match [base64]...[/base64] tags
+            var regex = /\[base64\](.*?)\[\/base64\]/g;
+
+            // Replace the tags with corresponding HTML img tags (adding Data URL scheme)
+            var replacedText = finalHtml.replace(regex, function(match, base64String) {
+            return '<img src="data:image/png;base64,' + base64String + '" />';
+            });
+
+            finalHtml = replacedText;
+
+            return finalHtml;
+        }
+
+        function formatAirobinMessage(message) {
+            // Check if the message contains an alarm, reminder, or todo list command
+            const alarmRegex = /!alarm_set (\d{2}[\/-]\d{2}[\/-]\d{4} \d{2}:\d{2}:\d{2})(?: (.*))?/;
+            const reminderRegex = /!reminder_set (\d{2}[\/-]\d{2}[\/-]\d{4} \d{2}:\d{2}:\d{2})(?: (.*))?/;
+            const todoListAddRegex = /!todolist_add (.+)/;
+            const todoListDeleteRegex = /!todolist_delete (.+)/;
+            const todoListCheckRegex = /!todolist_check (.+)/;
+
+            const alarmMatch = message.match(alarmRegex);
+            const reminderMatch = message.match(reminderRegex);
+            const todoListAddMatch = message.match(todoListAddRegex);
+            const todoListDeleteMatch = message.match(todoListDeleteRegex);
+            const todoListCheckMatch = message.match(todoListCheckRegex);
+
+            if (alarmMatch || reminderMatch) {
+                console.log('Found alarm/reminder');
+                const dateTime = alarmMatch ? alarmMatch[1] : reminderMatch[1];
+                const alarmMessage = alarmMatch ? alarmMatch[2] || 'Alarm!': (reminderMatch[2] || 'Reminder!');
+
+                // Convert the date to a specific format (with dashes) and swap date and month values
+                const dateParts = dateTime.split(/[-/]/);
+                const formattedDateTime = `${dateParts[1]}-${dateParts[0]}-${dateParts[2]}`;
+                console.log('Formatted date: ' + formattedDateTime);
+                const targetTime = new Date(formattedDateTime);
+                console.log('Target time: ' + targetTime);
+                const currentTime = new Date();
+                console.log('Current time: ' + currentTime);
+                const timeDifference = targetTime.getTime() - currentTime.getTime();
+                console.log('Time difference: ' + timeDifference);
+                if (timeDifference > 0) {
+                    setTimeout(() => {
+                        addMessageToChat('Reminder', alarmMessage, 'reminder-message');
+                        console.log('Alarm/Reminder triggered: ' + alarmMessage);
+                    }, timeDifference);
+                }
+
+                // Remove the alarm/reminder string from the message
+                message = message.replace(alarmRegex, '').replace(reminderRegex, '').trim();
+            }
+            if (todoListAddMatch) {
+                const taskName = todoListAddMatch[1];
+                document.querySelector('#tasks').innerHTML += `
+                    <div class="task">
+                        <span id="taskname">
+                            ${taskName}
+                        </span>
+                        <button class="delete">
+                            <i class="fa-regular fa-trash"></i>
+                        </button>
+                    </div>
+                `;
+                message = message.replace(todoListAddRegex, '').trim();
+            }
+
+            if (todoListDeleteMatch) {
+                const taskName = todoListDeleteMatch[1];
+                const tasks = document.querySelectorAll('#tasks .task #taskname');
+                tasks.forEach(task => {
+                    if (task.textContent === taskName) {
+                        task.parentNode.remove();
+                    }
+                });
+                message = message.replace(todoListDeleteRegex, '').trim();
+            }
+
+            if (todoListCheckMatch) {
+                const taskName = todoListCheckMatch[1];
+                const tasks = document.querySelectorAll('#tasks .task #taskname');
+                tasks.forEach(task => {
+                    if (task.textContent === taskName) {
+                        task.style.textDecoration = 'line-through';
+                    }
+                });
+                message = message.replace(todoListCheckRegex, '').trim();
+            }
+            
+            message = parseMarkdownWithCodeBlocks(message);
+            
+            const codeRegex = /```([\s\S]*?)```/g;
+            message = message.replace(codeRegex, function(match, code) {
+                return '<pre class="language-javascript"><code>' + Prism.highlight(code, Prism.languages.javascript, 'javascript') + '</code></pre>';
+            });
+
+            return message;
+        }
+
+        document.getElementById('parseButton').addEventListener('click', function () {
+            const input = document.getElementById('input').value;
+            const output = formatAirobinMessage(input);
+            document.getElementById('output').innerHTML = output;
+        });
+    </script>
+</body>
+</html>

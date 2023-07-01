@@ -17,6 +17,7 @@ import random
 from operator import itemgetter
 import glob
 from plugins.websearch import websearch, webvisit
+from plugins.diagram import draw_diagram
 from  processing import (open_file, save_file, load_json, save_json, update_index, timestamp_to_datetime, 
                          load_last_recent_keywords, load_conversation, extract_json_string, recent_conversations
                          )
@@ -40,6 +41,7 @@ prompt_search = config.PROMPT_SEARCH
 prompt_chat = config.PROMPT_CHAT
 chosen_model = config.CHATGPT_MODEL
 keyword_model = config.CHATGPT_MODEL_KEYWORDS
+summary_model = config.CHATGPT_MODEL_SUMMARY
 pinecone_namespace = config.PINECONE_NAMESPACE
 max_reply_tokens = config.MAX_REPLY_TOKENS
 prompt_thoughts = config.PROMPT_THOUGHTS
@@ -47,6 +49,8 @@ prompt_thoughts = config.PROMPT_THOUGHTS
 last_keywords = []
 
 retries = 0
+
+diagram_image = None
 
 # take another function as an argument and handles the retries with exponential backoff.
 # preventing the script from crashing due to temporary connection issues
@@ -74,36 +78,22 @@ def gpt3_embedding(content, engine='text-embedding-ada-002'):
     vector = response['data'][0]['embedding']  # this is a normal list
     return vector
 
-def parse_input(input_str):
-    search_pattern = r'\[SEARCH(ING)? FOR (.+?)\]'
-    visit_pattern = r'\[VISIT(ING)? WEBSITE (.+?)\]'
-    continue_pattern = r'\[CONTINUE\]'
-    summary_pattern = r'\[SUMMARY (.*?)(?=\n|$)\]'
-    new_summary_pattern = r'\[CONTINUE\](?:\s*|\n)*\[SUMMARY (.+?)\]'
+def ensure_brackets(input_string):
+    if not input_string.strip().startswith('[') or not input_string.strip().endswith(']'):
+        return f'[{input_string.strip()}]'
+    return input_string
 
+def escape_double_quotes(input_string):
+    escaped_double_quotes = re.sub(r'(?<!\\)"', r'\"', input_string)
+    return escaped_double_quotes.replace("'", '"')
 
-    search_matches = re.findall(search_pattern, input_str)
-    visit_matches = re.findall(visit_pattern, input_str)
-    continue_matches = re.findall(continue_pattern, input_str)
-    summary_matches = re.findall(summary_pattern, input_str)
-    new_summary_matches = re.findall(new_summary_pattern, input_str, re.DOTALL)
-
+def parse_input(input_json):
     actions = []
-
-    for match in search_matches:
-        actions.append({"action": "search", "value": match[1]})
-
-    for match in visit_matches:
-        actions.append({"action": "visit", "value": match[1]})
-
-    for _ in continue_matches:
-        actions.append({"action": "continue"})
-
-    for match in summary_matches:
-        actions.append({"action": "summary", "value": match[0]})
-
-    for match in new_summary_matches:
-        actions.append({"action": "summary", "value": match})
+    print(input_json)
+    for item in input_json:
+        action = item["action"]
+        value = item.get("value", None)
+        actions.append({"action": action, "value": value})
 
     return actions
 
@@ -128,11 +118,17 @@ def chatgpt_process_thoughts(socketio, question, searchresult, searchquery, summ
         new_response = exponential_backoff(openai.ChatCompletion.create, model=chosen_model, messages=messages, max_tokens = 2000, temperature=0.1)
         result = new_response['choices'][0]['message']['content']
         if debug: print(pink + "new response: ", result + reset)
-        actions = parse_input(result)
+        bracketed_input = ensure_brackets(result)
+        print(bracketed_input)
+        actions = []
+        for line in bracketed_input.splitlines():
+            actions.extend(parse_input(json.loads(line.strip())))
+        actions = parse_input(json.loads(bracketed_input))
         search_output = ""
         visit_output = ""
         continue_output = ""
         summary_output = ""
+        error_output = ""
 
         for action in actions:
             if action['action'] == 'search':
@@ -140,22 +136,38 @@ def chatgpt_process_thoughts(socketio, question, searchresult, searchquery, summ
             elif action['action'] == 'visit':
                 visit_output = f"[VISIT WEBSITE {action['value']}]"
             elif action['action'] == 'continue':
-                continue_output = "Continuing...\n"
+                continue_output = summary_output
             elif action['action'] == 'summary':
                 summary_output = action['value']
             else:
-                print("Invalid action")
+                error_output = action['value']
+            
+
+        output = ""
 
         if search_output:
             output = chatgpt_online(socketio, search_output, "", "", question, True, str(summary_output))
         elif visit_output:
             output = chatgpt_online(socketio, visit_output, "", "", question, False, str(summary_output))
         elif continue_output:
+            output = continue_output
+        elif summary_output:
             output = summary_output
         else:
-            output = ""
+            output = error_output
 
-        return output
+        print(output.strip())
+        output_msg = [ 
+                {
+                    "role": "user",
+                    "content": "convert this text to a readable markdown format, only responce with the converted text: " + output
+                }
+            ]
+        new_output = exponential_backoff(openai.ChatCompletion.create, model=summary_model, messages=output_msg, temperature=0.2)
+        result = new_output['choices'][0]['message']['content']
+        
+        print(result)
+        return result
 
 def chatgpt_online(socketio, query, prompt, messages, message=None, search=False, summary=""):
     global retries
@@ -167,7 +179,7 @@ def chatgpt_online(socketio, query, prompt, messages, message=None, search=False
         searchdata = websearch(query, google_api_key, google_cx)
         # if debug: print(green + "search data: ", searchdata + reset)
         current_date = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        full_search_prompt = prompt_search.replace('<<SEARCH_DATA>>', searchdata).replace('<<QUESTION>>', message).replace('<<SUMMARY>>', summary).replace('<<DATE>>', current_date)
+        full_search_prompt = prompt_search.replace('<<SEARCH_DATA>>', searchdata).replace('<<QUESTION>>', message).replace('<<SUMMARY>>', summary).replace('<<DATE>>', current_date).replace('<<SEARCH_QUERY>>', query)
         if debug: print(green + "full search prompt: ", full_search_prompt + reset)
         messages = [ 
             {
@@ -176,7 +188,7 @@ def chatgpt_online(socketio, query, prompt, messages, message=None, search=False
             }
         ]
         # get a new response from the chatbot based on the search results
-        new_response = exponential_backoff(openai.ChatCompletion.create, model=chosen_model, messages=messages, max_tokens = max_reply_tokens, temperature=0.1)
+        new_response = exponential_backoff(openai.ChatCompletion.create, model=chosen_model, messages=messages, max_tokens = max_reply_tokens, temperature=0.2)
         text = new_response['choices'][0]['message']['content']
         result = chatgpt_process_thoughts(socketio, message, searchdata, query, text, retries)
         return result
@@ -189,18 +201,19 @@ def chatgpt_online(socketio, query, prompt, messages, message=None, search=False
                 "content": message + "\n" + webdata
             }
         ]
-        new_response = exponential_backoff(openai.ChatCompletion.create, model=chosen_model, messages=messages, max_tokens = max_reply_tokens, temperature=0.1)
+        new_response = exponential_backoff(openai.ChatCompletion.create, model=chosen_model, messages=messages, max_tokens = max_reply_tokens, temperature=0.2)
         text = new_response['choices'][0]['message']['content']
         result = chatgpt_process_thoughts(socketio, message, "", query, text, retries)
         return result
-
+    
 def chatgpt_completion(socketio, messages, prompt, message=None):
+    global diagram_image
     # messages = json
     # prompt = prompt_response with replaced strings
     # message = most recent message from user
     model=chosen_model
     global last_keywords
-    response = exponential_backoff(openai.ChatCompletion.create, model=model, messages=messages, max_tokens = max_reply_tokens, temperature=0.1)
+    response = exponential_backoff(openai.ChatCompletion.create, model=model, messages=messages, max_tokens = max_reply_tokens, temperature=0.2)
     # the response is either normal text or a command
     text = response['choices'][0]['message']['content']
     # check if the response is a command
@@ -208,6 +221,34 @@ def chatgpt_completion(socketio, messages, prompt, message=None):
     websearch_match = re.match(pattern, text)
     pattern2 = r'\[(?:VISIT|VISITING) WEBSITE (.+)\]'
     webvisit_match = re.match(pattern2, text)
+    # Check if input starts with [DIAGRAM]
+    if re.search(r'\[(?:DRAW|DRAWING)? DIAGRAM\]', text):
+        # Split the text using the [DRAW DIAGRAM] pattern
+        parts = re.split(r'\[(?:DRAW|DRAWING)? DIAGRAM\]', text)
+
+        # Extract text before and after [DRAW DIAGRAM]
+        text_before = parts[0].strip()
+        text_after = parts[1].strip()
+
+        # Extract JSON string from the text after [DRAW DIAGRAM]
+        json_string = re.search(r'\{.*\}', text_after, re.DOTALL)
+        json_data = json.loads(json_string.group())
+
+        # Remove JSON from the text after [DRAW DIAGRAM]
+        text_after = re.sub(r'\{.*\}', '', text_after, flags=re.DOTALL).strip()
+
+        #print("Text before [DRAW DIAGRAM]:")
+        #print(text_before)
+        #print("\nJSON data:")
+        #print(json_data)
+        #print("\nText after JSON:")
+        #print(text_after)
+
+        # draw the diagram
+        diagram_image = draw_diagram(json_data)  # Uncomment this line when you have the draw_diagram function defined
+        # get the summary from the json
+        # text = json_data['summary'][0]['data']
+        text = text_before + "\n<<DIAGRAM_HERE>>\n" + text_after
     # if the response is a websearch command, then we need to do process it
     if websearch_match:
         #query = websearch_match.group(1)
@@ -255,6 +296,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 @app.route('/chat', methods=['POST', "OPTIONS"])
 def chat():
+    global diagram_image
     if request.method == "OPTIONS":  # CORS preflight
         return _build_cors_preflight_response()
     user_input = request.json.get('user_input')
@@ -266,7 +308,7 @@ def chat():
     # setting the convo_length to 20, but this can be changed later if gpt4 offers more tokens
     # if you get too many errors that the prompt is too long, you can reduce this number
     # but this will also reduce the 'memory' of the past conversations
-    convo_length = 20
+    convo_length = 14
     pinecone.init(api_key=pinecone_api_key, environment=pinecone_region)
     vdb = pinecone.Index(pinecone_index)
     vdb
@@ -309,6 +351,9 @@ def chat():
         timestamp = time()
         timestring = timestamp_to_datetime(timestamp)
         message = output
+        if diagram_image is not None:
+            output = output.replace('<<DIAGRAM_HERE>>', '[base64]' + diagram_image + '[/base64]')
+        diagram_image = None
         vector = gpt3_embedding(message)
         unique_id = str(uuid4())
         metadata = {'speaker': 'AIROBIN', 'target': username, 'time': timestamp, 'message': message, 'timestring': timestring, 'uuid': unique_id, 'msgid': msg_id}
@@ -334,4 +379,4 @@ def _corsify_actual_response(response):
     return response
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, host='0.0.0.0', port=5001)
+    socketio.run(app, debug=False, host='0.0.0.0', port=5001)

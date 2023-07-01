@@ -10,8 +10,10 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.16.0/umd/popper.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
-    <script src="prism.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.25.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js" integrity="sha512-zAs8dHhwlTbfcVGRX1x0EZAH/L99NjAFzX6muwOcOJc7dbGFNaW4O7b9QOyCMRYBNjO+E0Kx6yLDsiPQhhWm7g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.js" integrity="sha512-xbQU0+iHqhVt7VIXi6vBJKPh3IQBF5B84sSHdjKiSccyX/1ZI7Vnkt2/8y8uruj63/DVmCxfUNohPNruthTEQA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.1.0/dist/arc-f7872e1e.min.js"></script>
     <style>
         .chat-container {
             height: 70vh;
@@ -29,7 +31,6 @@
             border-radius: 10px;
             display: inline-block;
             max-width: 80%;
-            white-space: pre-wrap;
         }
         .user-message {
             background-color: #007bff;
@@ -68,10 +69,13 @@
             resize: none;
         }
         pre[class*="language-"] {
-            padding: 1em;
-            margin: 0;
+            font-family: monospace;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 10px;
+            white-space: pre-wrap;
             overflow: auto;
-            border-radius: 0.3em;
         }
         .loading-animation {
             display: inline-block;
@@ -244,98 +248,40 @@
 <script>
     const socket = io.connect('http://127.0.0.1:5001');
 
-    function parseMdL(md) {
+    var renderer = new marked.Renderer();
+            renderer.link = function(href, title, text) {
+                var link = marked.Renderer.prototype.link.apply(this, arguments);
+                return link.replace("<a","<a target='_blank'");
+            };
 
-        //ul
-        md = md.replace(/^\s*\n\*/gm, '<ul>\n*');
-        md = md.replace(/^(\*.+)\s*\n([^\*])/gm, '$1\n</ul>\n\n$2');
-        md = md.replace(/^\*(.+)/gm, '<li>$1</li>');
+            marked.setOptions({
+                renderer: renderer
+    });
 
-        //ol
-        md = md.replace(/^\s*\n\d\./gm, '<ol>\n1.');
-        md = md.replace(/^(\d\..+)\s*\n([^\d\.])/gm, '$1\n</ol>\n\n$2');
-        md = md.replace(/^\d\.(.+)/gm, '<li>$1</li>');
+    function parseMarkdownWithCodeBlocks(text) {
+            const codeBlockRegex = /```[\s\S]*?```/g;
+            const codeBlocks = text.match(codeBlockRegex) || [];
 
-        //blockquote
-        md = md.replace(/^\>(.+)/gm, '<blockquote>$1</blockquote>');
+            const markdownWithoutCodeBlocks = text.replace(codeBlockRegex, 'CODE_BLOCK_PLACEHOLDER');
+            const htmlWithoutCodeBlocks = marked.parse(markdownWithoutCodeBlocks);
 
-        //h
-        md = md.replace(/(^|\n)[\#]{6}(.+)/g, '$1<h6>$2</h6>');
-        md = md.replace(/(^|\n)[\#]{5}(.+)/g, '$1<h5>$2</h5>');
-        md = md.replace(/(^|\n)[\#]{4}(.+)/g, '$1<h4>$2</h4>');
-        md = md.replace(/(^|\n)[\#]{3}(.+)/g, '$1<h3>$2</h3>');
-        md = md.replace(/(^|\n)[\#]{2}(.+)/g, '$1<h2>$2</h2>');
-        md = md.replace(/(^|\n)[\#]{1}(.+)/g, '$1<h1>$2</h1>');
+            let finalHtml = htmlWithoutCodeBlocks;
+            codeBlocks.forEach((codeBlock) => {
+                finalHtml = finalHtml.replace('CODE_BLOCK_PLACEHOLDER', codeBlock);
+            });
 
-        //alt h
-        md = md.replace(/^(.+)\n\=+/gm, '<h1>$1</h1>');
-        md = md.replace(/^(.+)\n(?<!- )\-+/gm, '<h2>$1</h2>');
+            // Regular expression to match [base64]...[/base64] tags
+            var regex = /\[base64\](.*?)\[\/base64\]/g;
 
-        //images
-        md = md.replace(/\!\[([^\]]+)\]\(([^\)]+)\)/g, '<img src="$2" alt="$1" />');
+            // Replace the tags with corresponding HTML img tags (adding Data URL scheme)
+            var replacedText = finalHtml.replace(regex, function(match, base64String) {
+            return '<img src="data:image/png;base64,' + base64String + '" />';
+            });
 
-        //font styles
-        md = md.replace(/[\*\_]{2}([^\*\_]+)[\*\_]{2}/g, '<b>$1</b>');
-        md = md.replace(/[\*\_]{1}([^\*\_]+)[\*\_]{1}/g, '<i>$1</i>');
-        md = md.replace(/[\~]{2}([^\~]+)[\~]{2}/g, '<del>$1</del>');
+            finalHtml = replacedText;
 
-        //pre
-        md = md.replace(/^\s*\n\`\`\`(([^\s]+))?/gm, '<pre class="$2">');
-        md = md.replace(/^\`\`\`\s*\n/gm, '</pre>\n\n');
-
-        //code
-        md = md.replace(/[\`]{1}([^\`]+)[\`]{1}/g, '<code>$1</code>');
-
-        //strip p from pre
-        md = md.replace(/(\<pre.+\>)\s*\n\<p\>(.+)\<\/p\>/gm, '$1$2');
-
-        // Parse reference-style links
-        const refLinks = {};
-        md = md.replace(/^\[\^([^\]]+)\]:\s+\(([^)]+)\)$/gm, (match, key, url) => {
-            refLinks[key] = url;
-            return "";
-        });
-
-        // Replace links using the parsed reference-style links
-        md = md.replace(/\[\^([^\]]+)\]/g, (match, key) => {
-            const url = refLinks[key] || "#";
-            return `<a href="${url}" target="_blank">${key}</a>`;
-        });
-
-        // Parse normal links
-        md = md.replace(/[\[]{1}([^\]]+)[\]]{1}[\(]{1}([^\)\"]+)(\"(.+)\")?[\)]{1}/g, '<a href="$2" target="_blank" title="$4">$1</a>');
-
-        // table
-        md = md.replace(/((?:\|[^|\n]+)+\|\n(?:\|[-: ]+)+\|\n(?:(?:\|[^|\n]+)+\|?\n?)+)/g, function (m, table) {
-            const rows = table.trim().split('\n');
-            let html = '<table>';
-            for (let i = 0; i < rows.length; i++) {
-                const row = rows[i];
-                const isHeader = i === 0;
-                const isSeparator = i === 1;
-                const tag = isHeader ? 'th' : 'td';
-                const cells = row.split('|').slice(1, -1);
-
-                // Skip the separator row
-                if (isSeparator) continue;
-
-                html += '<tr>';
-                for (const cell of cells) {
-                    html += `<${tag}>${cell.trim()}</${tag}>`;
-                }
-                html += '</tr>';
-            }
-            html += '</table>';
-            return html;
-        });
-
-        // p
-        md = md.replace(/^\s*(\n)?(.+)/gm, function(m){
-            return  /\<(\/)?(h\d|ul|ol|li|blockquote|pre|img|table|tr|th|td)/.test(m) ? m : '<p>'+m+'</p>';
-        });
-
-        return md;
-    }
+            return finalHtml;
+        }
 
 
     socket.on('progress', (data) => {
@@ -485,7 +431,6 @@
         const PINCODE_URL = 'pincodes.php';
 
         function formatAirobinMessage(message) {
-            message = parseMdL(message);
             // Check if the message contains an alarm, reminder, or todo list command
             const alarmRegex = /!alarm_set (\d{2}[\/-]\d{2}[\/-]\d{4} \d{2}:\d{2}:\d{2})(?: (.*))?/;
             const reminderRegex = /!reminder_set (\d{2}[\/-]\d{2}[\/-]\d{4} \d{2}:\d{2}:\d{2})(?: (.*))?/;
@@ -560,11 +505,17 @@
                 });
                 message = message.replace(todoListCheckRegex, '').trim();
             }
-
+            
+            message = parseMarkdownWithCodeBlocks(message);
+            
             const codeRegex = /```([\s\S]*?)```/g;
-            return message.replace(codeRegex, function(match, code) {
+            message = message.replace(codeRegex, function(match, code) {
                 return '<pre class="language-javascript"><code>' + Prism.highlight(code, Prism.languages.javascript, 'javascript') + '</code></pre>';
             });
+
+            console.log('Final message: ' + message);
+            return message;
+
         }
 
         function addMessageToChat(user, message, cssClass, retryButton = false) {
@@ -730,6 +681,7 @@
                 success: function(response) {
                     const airobinResponse = response.airobin_response;
                     $('#chat-container .airobin-message').last().html(formatAirobinMessage(airobinResponse)); // Replace loading animation with the response
+                    console.log('AIROBIN response: ' + airobinResponse);
                     $('#user-input').prop('disabled', false); // Enable user input
                 },
                 error: function() {
